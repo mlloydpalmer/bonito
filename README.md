@@ -68,15 +68,21 @@ $ bonito train /data/training/model-dir
 
 All training calls use Automatic Mixed Precision to speed up training. To disable this, set the `--no-amp` flag to True. 
 
-## Pair Decoding
+## Duplex
 
-Pair decoding takes a template and complement read to produce higher quaility calls.
+Duplex calling takes template and complement reads and produces a single higher quality call.
 
 ```bash
-$ bonito pair pairs.csv /data/reads > basecalls.fasta
+$ bonito duplex dna_r9.4.1 /data/reads --pairs pairs.txt --reference ref.mmi > basecalls.sam
 ```
 
 The `pairs.csv` file is expected to contain pairs of read ids per line *(seperated by a single space)*.
+
+Follow on reads can also be automatically paired if an alignment summary file is provided instead of a `pairs.csv`.
+
+```bash
+$ bonito duplex dna_r9.4.1 /data/reads --summary sequencing_summary.txt --reference ref.mmi > basecalls.sam
+```
 
 ## Interface
 

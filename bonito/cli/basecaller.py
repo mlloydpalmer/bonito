@@ -29,7 +29,7 @@ def main(args):
 
     if args.reference:
         sys.stderr.write("> loading reference\n")
-        aligner = Aligner(args.reference, preset='ont-map')
+        aligner = Aligner(args.reference, preset='ont-map', best_n=1)
         if not aligner:
             sys.stderr.write("> failed to load/build index\n")
             exit(1)
@@ -49,7 +49,7 @@ def main(args):
 
     if args.save_ctc:
         reads = (
-            chunk for read in reads for chunk in read_chunks(read)
+            chunk for read in reads for chunk in read_chunks(read, chunksize=args.chunksize)
         )
         basecalls = basecall(
             model, reads, batchsize=64, chunksize=args.chunksize,
