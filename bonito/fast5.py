@@ -122,7 +122,10 @@ def norm_by_noisiest_section(signal, samples=100, threshold=6.0):
         noise[window] = np.where(signal[window].std() > threshold, 1, 0)
 
     # start and end low for peak finding
-    noise[0] = 0; noise[-1] = 0
+    try:
+        noise[0] = 0; noise[-1] = 0
+    except IndexError:
+        return
     peaks, info = find_peaks(noise, width=(None, None))
 
     if len(peaks):
@@ -162,11 +165,15 @@ def get_read_ids(filename, read_ids=None, skip=False):
     """
     Get all the read_ids from the file `filename`.
     """
-    with get_fast5_file(filename, 'r') as f5_fh:
-        ids = [(filename, rid) for rid in f5_fh.get_read_ids()]
-        if read_ids is None:
-            return ids
-        return [rid for rid in ids if (rid[1] in read_ids) ^ skip]
+    try:
+        with get_fast5_file(filename, 'r') as f5_fh:
+            ids = [(filename, rid) for rid in f5_fh.get_read_ids()]
+    except OSError:
+        sys.stderr.write("OSError when reading file %s\n" % (filename))
+    else:
+            if read_ids is None:
+                return ids
+            return [rid for rid in ids if (rid[1] in read_ids) ^ skip]
 
 
 def get_raw_data_for_read(info):
@@ -186,7 +193,18 @@ def get_reads(directory, read_ids=None, skip=False, max_read_size=0, n_proc=1, r
     get_filtered_reads = partial(get_read_ids, read_ids=read_ids, skip=skip)
     with Pool(n_proc) as pool:
         for job in chain(pool.imap(get_filtered_reads, Path(directory).glob(pattern))):
+            if job is None: continue
             for read in pool.imap(get_raw_data_for_read, job):
+                if read.signal is None:
+                    sys.stderr.write(
+                        "> skipping due to norm_by_noisiest_section IndexError %s\n" % (read.read_id)
+                    )
+                    continue
+                if len(read.signal) < 100:
+                    sys.stderr.write(
+                        "> skipping short read %s (%s samples)\n" % (read.read_id, len(read.signal))
+                    )
+                    continue
                 if max_read_size > 0 and len(read.signal) > max_read_size:
                     sys.stderr.write(
                         "> skipping long read %s (%s samples)\n" % (read.read_id, len(read.signal))
