@@ -156,6 +156,17 @@ def summary_file():
     return '%s_summary.tsv' % splitext(stdout)[0]
 
 
+def trim_outfiles():
+    """
+    Return the filenames to use for the trimmed_fast5s and refs.fasta.
+    """
+    stdout = realpath('/dev/fd/1')
+    if sys.stdout.isatty() or stdout.startswith('/proc'):
+        return 'trimmed_fast5s', 'refs.fasta'
+    outdir = dirname(splitext(stdout)[0])
+    return '%s/trimmed_fast5s' % outdir, '%s/refs.fasta' % outdir
+
+
 summary_field_names = [
     'filename',
     'read_id',
@@ -320,17 +331,41 @@ def duplex_summary_row(read_temp, comp_read, seqlen, qscore, alignment=False):
     return dict(zip(duplex_summary_field_names, fields))
 
 
+def write_trimmed_fast5(trimmed_fast5s_dir, model, read_id, seq):
+    pass
+
+
+def write_ref(refs_file, read_id, seq):
+    pass
+
+
+@contextmanager
+def conditional_open(f_name, mode, cond):
+    """
+    A context manager to conditionally open a file.
+    """
+    if cond:
+        resource = open(f_name, mode)
+        try:
+            yield resource
+        finally:
+            resource.close()
+    else:
+        yield None
+
 
 class Writer(Thread):
 
-    def __init__(self, iterator, aligner, fd=sys.stdout, fastq=False, duplex=False):
+    def __init__(self, iterator, aligner, model, fd=sys.stdout, fastq=False, duplex=False, trim=False):
         super().__init__()
         self.fd = fd
         self.log = []
         self.fastq = fastq
         self.duplex = duplex
         self.aligner = aligner
+        self.model = model
         self.iterator = iterator
+        self.trim = trim
         self.write_headers()
 
     def write_headers(self):
@@ -339,7 +374,11 @@ class Writer(Thread):
 
     def run(self):
 
-        with CSVLogger(summary_file(), sep='\t') as summary:
+        if self.trim:
+            trimmed_fast5s_dir = trim_outfiles()[0]
+            os.makedirs(trimmed_fast5s_dir, exist_ok=True)
+
+        with CSVLogger(summary_file(), sep='\t') as summary, conditional_open(trim_outfiles()[1], 'a', cond=self.trim) as refs_file:
             for read, res in self.iterator:
 
                 seq = res['sequence']
@@ -357,6 +396,9 @@ class Writer(Thread):
                 if len(seq):
                     if self.aligner:
                         write_sam(read_id, seq, qstring, mapping, fd=self.fd, unaligned=mapping is None)
+                        # if self.trim:
+                            # write_fast5(trimmed_fast5s_dir, model, read_id, seq)
+                            # write_ref(refs_file, read_id, seq)
                     else:
                         if self.fastq:
                             write_fastq(read_id, seq, qstring, fd=self.fd)

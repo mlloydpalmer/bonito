@@ -24,6 +24,10 @@ def main(args):
         sys.stderr.write("> a reference is needed to output ctc training data\n")
         exit(1)
 
+    if args.trim_fast5s and not args.reference:
+        sys.stderr.write("> a reference is needed to trim fast5s\n")
+        exit(1)
+
     sys.stderr.write("> loading model\n")
     model = load_model(args.model_directory, args.device, weights=int(args.weights))
 
@@ -66,7 +70,7 @@ def main(args):
         )
         writer = Writer(
             tqdm(basecalls, desc="> calling", unit=" reads", leave=False),
-            aligner, fastq=args.fastq
+            aligner, model, fastq=args.fastq, trim=args.trim_fast5s
         )
     t0 = perf_counter()
     writer.start()
@@ -101,4 +105,6 @@ def argparser():
     parser.add_argument("--batchsize", default=32, type=int)
     parser.add_argument("--chunksize", default=4000, type=int)
     parser.add_argument("--max-reads", default=0, type=int)
+    parser.add_argument("--trim_fast5s", action="store_true", default=False, help='Trim fast5s to aligned section and '
+        'save in "trimmed_fast5s" dir. Output references to "refs.fasta" with sequence names corresponding to read ids.')
     return parser
