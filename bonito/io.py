@@ -335,8 +335,18 @@ def write_trimmed_fast5(trimmed_fast5s_dir, model, read_id, seq):
     pass
 
 
-def write_ref(refs_file, read_id, seq):
-    pass
+def get_ref(mapping, aligner):
+    ref = aligner.seq(mapping.ctg, mapping.r_st, mapping.r_en)
+    return revcomp(ref) if (mapping.strand == -1) else ref
+
+
+dir_dict = {1:'+', -1:'-'}
+
+
+def write_ref(refs_file, read_id, seq, mapping, aligner):
+    direction = dir_dict[mapping.strand]
+    refseq = get_ref(mapping, aligner)
+    refs_file.write(f'>{read_id} {mapping.ctg}:{mapping.r_st}-{mapping.r_en}({direction})\n{refseq}\n')
 
 
 @contextmanager
@@ -396,9 +406,9 @@ class Writer(Thread):
                 if len(seq):
                     if self.aligner:
                         write_sam(read_id, seq, qstring, mapping, fd=self.fd, unaligned=mapping is None)
-                        # if self.trim:
+                        if self.trim:
+                            write_ref(refs_file, read_id, seq, mapping, self.aligner)
                             # write_fast5(trimmed_fast5s_dir, model, read_id, seq)
-                            # write_ref(refs_file, read_id, seq)
                     else:
                         if self.fastq:
                             write_fastq(read_id, seq, qstring, fd=self.fd)
