@@ -14,6 +14,8 @@ from os.path import realpath, splitext, dirname
 
 import numpy as np
 from mappy import revcomp
+from ont_fast5_api.fast5_file import Fast5File
+from ont_fast5_api.fast5_info import ReadInfo
 
 import bonito
 from bonito.cli.convert import typical_indices
@@ -331,8 +333,36 @@ def duplex_summary_row(read_temp, comp_read, seqlen, qscore, alignment=False):
     return dict(zip(duplex_summary_field_names, fields))
 
 
-def write_trimmed_fast5(trimmed_fast5s_dir, model, read_id, seq):
-    pass
+def write_trimmed_fast5(trimmed_fast5s_dir, read, mapping, model):
+    if mapping:
+
+        output_file = f"{trimmed_fast5s_dir}/{read.read_id}_trimmed.fast5"
+        if os.path.exists(output_file):
+            os.remove(output_file)
+
+        with Fast5File(str(output_file), 'w') as output_fast5:
+            read_attrs = read.read_attrs
+            new_read_id = read.read_id + '_trimmed'
+            read_attrs['read_id'] = new_read_id
+
+            output_fast5.add_channel_info(read.channel_info)
+            output_fast5.set_tracking_id(read.tracking_id)
+            output_fast5.add_context_tags(read.context_tags)
+
+            trim_start = mapping.q_st * model.stride
+            trim_end = mapping.q_en * model.stride
+            trimmed_raw = read.raw[trim_start:trim_end]
+
+            read_attrs['duration'] = len(trimmed_raw)
+            read_info = ReadInfo(read_attrs['read_number'], read_attrs['read_id'], read_attrs['start_time'],
+                read_attrs['duration'], mux=read_attrs['start_mux'], median_before=read_attrs['median_before'])
+            output_fast5.status.read_info.append(read_info)
+            n = len(output_fast5.status.read_info) - 1
+            output_fast5.status.read_number_map[read_attrs['read_number']] = n
+            output_fast5.status.read_id_map[read_attrs['read_id']] = n
+            group_name = output_fast5.raw_dataset_group_name
+            output_fast5._add_group(group_name, read_attrs)
+            output_fast5.add_raw_data(trimmed_raw, attrs=read_attrs)
 
 
 def get_ref(mapping, aligner):
@@ -343,10 +373,11 @@ def get_ref(mapping, aligner):
 dir_dict = {1:'+', -1:'-'}
 
 
-def write_ref(refs_file, read_id, seq, mapping, aligner):
-    direction = dir_dict[mapping.strand]
-    refseq = get_ref(mapping, aligner)
-    refs_file.write(f'>{read_id} {mapping.ctg}:{mapping.r_st}-{mapping.r_en}({direction})\n{refseq}\n')
+def write_ref(refs_file, read_id, mapping, aligner):
+    if mapping:
+        direction = dir_dict[mapping.strand]
+        refseq = get_ref(mapping, aligner)
+        refs_file.write(f'>{read_id} {mapping.ctg}:{mapping.r_st}-{mapping.r_en}({direction})\n{refseq}\n')
 
 
 @contextmanager
@@ -407,8 +438,8 @@ class Writer(Thread):
                     if self.aligner:
                         write_sam(read_id, seq, qstring, mapping, fd=self.fd, unaligned=mapping is None)
                         if self.trim:
-                            write_ref(refs_file, read_id, seq, mapping, self.aligner)
-                            # write_fast5(trimmed_fast5s_dir, model, read_id, seq)
+                            write_ref(refs_file, read_id, mapping, self.aligner)
+                            write_trimmed_fast5(trimmed_fast5s_dir, read, mapping, self.model)
                     else:
                         if self.fastq:
                             write_fastq(read_id, seq, qstring, fd=self.fd)
