@@ -12,6 +12,13 @@ import torch
 import numpy as np
 from scipy.signal import find_peaks
 from ont_fast5_api.fast5_interface import get_fast5_file
+from ont_fast5_api.data_sanitisation import _clean
+
+
+def dict_channel_info(channel_info):
+    channel_info = {key: _clean(value) for key, value in channel_info.items()}
+    channel_info['channel_number'] = int(channel_info['channel_number'])
+    return channel_info
 
 
 class Read:
@@ -25,7 +32,11 @@ class Read:
             self.run_id = self.run_id.decode()
 
         read_attrs = read.handle[read.raw_dataset_group_name].attrs
+        self.read_attrs = dict(read_attrs)
         channel_info = read.handle[read.global_key + 'channel_id'].attrs
+        self.channel_info = dict_channel_info(channel_info)
+        self.tracking_id = read.get_tracking_id()
+        self.context_tags = read.get_context_tags()
 
         self.offset = int(channel_info['offset'])
         self.sampling_rate = channel_info['sampling_rate']
@@ -40,6 +51,7 @@ class Read:
         self.duration = read_attrs['duration'] / self.sampling_rate
 
         raw = read.handle[read.raw_dataset_name][:]
+        self.raw = raw
         scaled = np.array(self.scaling * (raw + self.offset), dtype=np.float32)
 
         trim_start, _ = trim(scaled[:8000])
