@@ -6,12 +6,10 @@ import os
 import sys
 import csv
 import pandas as pd
-from warnings import warn
 from threading import Thread
 from logging import getLogger
 from contextlib import contextmanager
 from os.path import realpath, splitext, dirname
-from functools import cached_property
 
 import numpy as np
 from mappy import revcomp
@@ -191,7 +189,7 @@ class MappedRead:
 
 def write_trimmed_fast5(trimmed_fast5s_dir, read, mapping, model, seq):
     if mapping:
-        output_file = f"{trimmed_fast5s_dir}/{read.read_id}_trimmed.fast5"
+        output_file = "%s/%s_trimmed.fast5" % (trimmed_fast5s_dir, read.read_id)
         if os.path.exists(output_file):
             os.remove(output_file)
 
@@ -240,7 +238,7 @@ def write_ref(refs_file, read_id, mapping, aligner):
     if mapping:
         direction = dir_dict[mapping.strand]
         refseq = get_ref(mapping, aligner)
-        refs_file.write(f'>{read_id} {mapping.ctg}:{mapping.r_st}-{mapping.r_en}({direction})\n{refseq}\n')
+        refs_file.write(">%s %s:%s-%s(%s)\n%s\n" % (read_id, mapping.ctg, mapping.r_st, mapping.r_en, direction, refseq))
 
 
 def summary_file():
@@ -467,7 +465,7 @@ class Writer(Thread):
             trimmed_fast5s_dir = trim_outfiles()[0]
             os.makedirs(trimmed_fast5s_dir, exist_ok=True)
 
-        with CSVLogger(summary_file(), sep='\t') as summary, conditional_open(trim_outfiles()[1], 'a', cond=self.trim) as refs_file:
+        with CSVLogger(summary_file(), sep='\t') as summary, conditional_open(trim_outfiles()[1], 'w', cond=self.trim) as refs_file:
             for read, res in self.iterator:
 
                 seq = res['sequence']
