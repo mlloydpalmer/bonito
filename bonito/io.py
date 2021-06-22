@@ -215,6 +215,8 @@ def write_trimmed_fast5(trimmed_fast5s_dir, read, mapping, model, seq):
             trimmed_raw = read.raw[trim_start:trim_end]
 
             read_attrs['duration'] = len(trimmed_raw)
+            read_attrs['start_time'] = read_attrs['start_time'] + (trim_start / read.channel_info['sampling_rate'])
+
             read_info = ReadInfo(read_attrs['read_number'], read_attrs['read_id'], read_attrs['start_time'],
                 read_attrs['duration'], mux=read_attrs['start_mux'], median_before=read_attrs['median_before'])
             output_fast5.status.read_info.append(read_info)
