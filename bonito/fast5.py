@@ -54,19 +54,28 @@ class Read:
         self.raw = raw
         scaled = np.array(self.scaling * (raw + self.offset), dtype=np.float32)
 
-        trim_start, _ = trim(scaled[:8000])
-        scaled = scaled[trim_start:]
-        self.template_start = self.start + (1 / self.sampling_rate) * trim_start
-        self.template_duration = self.duration - (1 / self.sampling_rate) * trim_start
-
-        if len(scaled) > 8000:
-            med, mad = med_mad(scaled)
-            self.signal = (scaled - med) / mad
+        if len(self.raw) <= 10:
+            sys.stderr.write(
+                "> skipping short read %s (%s samples)\n" % (self.read_id, len(self.raw))
+            )
+            self.template_start = None
+            self.template_duration = None
+            self.signal = None
         else:
-            self.signal = norm_by_noisiest_section(scaled)
+            trim_start, _ = trim(scaled[:8000])
+            scaled = scaled[trim_start:]
 
-    def __repr__(self):
-        return "Read('%s')" % self.read_id
+            self.template_start = self.start + (1 / self.sampling_rate) * trim_start
+            self.template_duration = self.duration - (1 / self.sampling_rate) * trim_start
+
+            if len(scaled) > 8000:
+                med, mad = med_mad(scaled)
+                self.signal = (scaled - med) / mad
+            else:
+                self.signal = norm_by_noisiest_section(scaled)
+
+        def __repr__(self):
+            return "Read('%s')" % self.read_id
 
 
 class ReadChunk:
@@ -134,10 +143,7 @@ def norm_by_noisiest_section(signal, samples=100, threshold=6.0):
         noise[window] = np.where(signal[window].std() > threshold, 1, 0)
 
     # start and end low for peak finding
-    try:
-        noise[0] = 0; noise[-1] = 0
-    except IndexError:
-        return
+    noise[0] = 0; noise[-1] = 0
     peaks, info = find_peaks(noise, width=(None, None))
 
     if len(peaks):
@@ -208,9 +214,6 @@ def get_reads(directory, read_ids=None, skip=False, max_read_size=0, n_proc=1, r
             if job is None: continue
             for read in pool.imap(get_raw_data_for_read, job):
                 if read.signal is None:
-                    sys.stderr.write(
-                        "> skipping due to norm_by_noisiest_section IndexError %s\n" % (read.read_id)
-                    )
                     continue
                 if len(read.signal) < 100:
                     sys.stderr.write(
