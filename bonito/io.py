@@ -13,10 +13,6 @@ from os.path import realpath, splitext, dirname
 
 import numpy as np
 from mappy import revcomp
-from ont_fast5_api.fast5_file import Fast5File
-from ont_fast5_api.fast5_info import ReadInfo
-import torch
-import seqdist
 
 import bonito
 from bonito.cli.convert import typical_indices
@@ -149,100 +145,6 @@ def write_sam(read_id, sequence, qstring, mapping, fd=sys.stdout, unaligned=Fals
     fd.flush()
 
 
-def rectify(ragged_array, max_len=None):
-    lengths = np.array([len(x) for x in ragged_array], dtype=np.uint16)
-    padded = np.zeros((len(ragged_array), max_len or np.max(lengths)), dtype=ragged_array[0].dtype)
-    for x, y in zip(ragged_array, padded):
-        y[:len(x)] = x
-    return padded, lengths
-
-
-def get_ctc_targets(seqs, dtype=np.int):
-    t = bytes.maketrans(b'ACGT', b'\x01\x02\x03\x04')
-    targets, target_lengths = rectify([np.array(bytearray(seq, 'utf-8').translate(t)) for seq in seqs])
-    return targets.astype(dtype), target_lengths.astype(dtype)
-
-
-def compute_alignments(model, mapped_read):
-    with torch.no_grad():
-        device = next(model.parameters()).device
-        batch = torch.from_numpy(mapped_read.read.signal).unsqueeze(0).unsqueeze(0)
-        scores = model.encoder(batch.to(dtype=torch.float16, device=device))
-
-    targets, target_lengths = [torch.tensor(x, device=device) for x in get_ctc_targets([mapped_read.seq])]
-    stay_scores, move_scores = model.seqdist.prepare_ctc_scores(scores, targets)
-    target_lengths = target_lengths + 1 - model.seqdist.state_len
-    alignments = seqdist.ctc_simple.viterbi_alignments(stay_scores, move_scores, target_lengths)
-    return alignments.argmax(2).to(torch.int16).T[0].to('cpu').numpy()
-
-
-class MappedRead:
-
-    def __init__(self, read, mapping, seq):
-        self.read = read
-        self.mapping = mapping
-        self.seq = seq
-
-    def alignments(self, model):
-        return compute_alignments(model, self)
-
-
-def write_trimmed_fast5(trimmed_fast5s_dir, read, mapping, model, seq):
-    if mapping:
-        output_file = "%s/%s_trimmed.fast5" % (trimmed_fast5s_dir, read.read_id)
-        if os.path.exists(output_file):
-            os.remove(output_file)
-
-        mapped_read = MappedRead(read, mapping, seq)
-        alignments = mapped_read.alignments(model)
-
-        with Fast5File(str(output_file), 'w') as output_fast5:
-            read_attrs = read.read_attrs
-            new_read_id = read.read_id + '_trimmed'
-            read_attrs['read_id'] = new_read_id
-
-            output_fast5.add_channel_info(read.channel_info)
-            output_fast5.set_tracking_id(read.tracking_id)
-            output_fast5.add_context_tags(read.context_tags)
-
-            start = np.where(alignments == mapping.q_st)[0].min()
-            if len(np.where(alignments == mapping.q_en)[0]) == 0:
-                end = len(alignments)
-            else:
-                end = np.where(alignments == mapping.q_en)[0].max()
-            trim_start = start * model.stride
-            trim_end = end * model.stride
-            trimmed_raw = read.raw[trim_start:trim_end]
-
-            read_attrs['duration'] = len(trimmed_raw)
-            read_attrs['start_time'] = read_attrs['start_time'] + (trim_start / read.channel_info['sampling_rate'])
-
-            read_info = ReadInfo(read_attrs['read_number'], read_attrs['read_id'], read_attrs['start_time'],
-                read_attrs['duration'], mux=read_attrs['start_mux'], median_before=read_attrs['median_before'])
-            output_fast5.status.read_info.append(read_info)
-            n = len(output_fast5.status.read_info) - 1
-            output_fast5.status.read_number_map[read_attrs['read_number']] = n
-            output_fast5.status.read_id_map[read_attrs['read_id']] = n
-            group_name = output_fast5.raw_dataset_group_name
-            output_fast5._add_group(group_name, read_attrs)
-            output_fast5.add_raw_data(trimmed_raw, attrs=read_attrs)
-
-
-def get_ref(mapping, aligner):
-    ref = aligner.seq(mapping.ctg, mapping.r_st, mapping.r_en)
-    return revcomp(ref) if (mapping.strand == -1) else ref
-
-
-dir_dict = {1: '+', -1: '-'}
-
-
-def write_ref(refs_file, read_id, mapping, aligner):
-    if mapping:
-        direction = dir_dict[mapping.strand]
-        refseq = get_ref(mapping, aligner)
-        refs_file.write(">%s %s:%s-%s(%s)\n%s\n" % (read_id, mapping.ctg, mapping.r_st, mapping.r_en, direction, refseq))
-
-
 def summary_file():
     """
     Return the filename to use for the summary tsv.
@@ -251,17 +153,6 @@ def summary_file():
     if sys.stdout.isatty() or stdout.startswith('/proc'):
         return 'summary.tsv'
     return '%s_summary.tsv' % splitext(stdout)[0]
-
-
-def trim_outfiles():
-    """
-    Return the filenames to use for the trimmed_fast5s and refs.fasta.
-    """
-    stdout = realpath('/dev/fd/1')
-    if sys.stdout.isatty() or stdout.startswith('/proc'):
-        return 'trimmed_fast5s', 'refs.fasta'
-    outdir = dirname(splitext(stdout)[0])
-    return '%s/trimmed_fast5s' % outdir, '%s/refs.fasta' % outdir
 
 
 summary_field_names = [
@@ -293,10 +184,13 @@ summary_field_names = [
     'alignment_strand_coverage',
     'alignment_identity',
     'alignment_accuracy',
+    # if signal_mapping
+    'trim_start',
+    'trim_end',
 ]
 
 
-def summary_row(read, seqlen, qscore, alignment=False):
+def summary_row(read, seqlen, qscore, alignment=False, trim_positions=False):
     """
     Summary tsv row.
     """
@@ -338,10 +232,20 @@ def summary_row(read, seqlen, qscore, alignment=False):
             correct / length,
         ])
 
+        if isinstance(trim_positions, tuple):
+            fields.extend(
+                [trim_positions[0], trim_positions[1]]
+            )
+
     elif alignment is None:
         fields.extend(
             ['*', -1, -1, -1, -1, '*', 0, 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0]
         )
+
+        if isinstance(trim_positions, tuple):
+            fields.extend(
+                [-1, -1]
+            )
 
     return dict(zip(summary_field_names, fields))
 
@@ -443,9 +347,20 @@ def conditional_open(f_name, mode, cond):
         yield None
 
 
+def signalmap_outfile():
+    """
+    Return the filenames to use for the trimmed_fast5s and refs.fasta.
+    """
+    stdout = realpath('/dev/fd/1')
+    if sys.stdout.isatty() or stdout.startswith('/proc'):
+        return 'base_signal_mappings.npz'
+    outdir = dirname(splitext(stdout)[0])
+    return '%s/base_signal_mappings.npz' % outdir
+
+
 class Writer(Thread):
 
-    def __init__(self, iterator, aligner, model, fd=sys.stdout, fastq=False, duplex=False, trim=False):
+    def __init__(self, iterator, aligner, model, fd=sys.stdout, fastq=False, duplex=False, signal_mapping=False):
         super().__init__()
         self.fd = fd
         self.log = []
@@ -454,7 +369,7 @@ class Writer(Thread):
         self.aligner = aligner
         self.model = model
         self.iterator = iterator
-        self.trim = trim
+        self.signal_mapping = signal_mapping
         self.write_headers()
 
     def write_headers(self):
@@ -463,17 +378,15 @@ class Writer(Thread):
 
     def run(self):
 
-        if self.trim:
-            trimmed_fast5s_dir = trim_outfiles()[0]
-            os.makedirs(trimmed_fast5s_dir, exist_ok=True)
-
-        with CSVLogger(summary_file(), sep='\t') as summary, conditional_open(trim_outfiles()[1], 'w', cond=self.trim) as refs_file:
+        with CSVLogger(summary_file(), sep='\t') as summary:  #, conditional_open(signalmap_outfile(), 'w', cond=self.signal_mapping) as npzfile:
             for read, res in self.iterator:
 
                 seq = res['sequence']
                 qstring = res.get('qstring', '*')
                 mean_qscore = res.get('mean_qscore', 0.0)
                 mapping = res.get('mapping', False)
+                base_signal_alignments = res.get('base_signal_alignments', False)
+                trim_positions = res.get('trim_positions', False)
 
                 if self.duplex:
                     samples = len(read[0].signal) + len(read[1].signal)
@@ -485,9 +398,6 @@ class Writer(Thread):
                 if len(seq):
                     if self.aligner:
                         write_sam(read_id, seq, qstring, mapping, fd=self.fd, unaligned=mapping is None)
-                        if self.trim:
-                            write_ref(refs_file, read_id, mapping, self.aligner)
-                            write_trimmed_fast5(trimmed_fast5s_dir, read, mapping, self.model, seq)
                     else:
                         if self.fastq:
                             write_fastq(read_id, seq, qstring, fd=self.fd)
@@ -497,9 +407,13 @@ class Writer(Thread):
                     if self.duplex:
                         summary.append(duplex_summary_row(read[0], read[1], len(seq), mean_qscore, alignment=mapping))
                     else:
-                        summary.append(summary_row(read, len(seq), mean_qscore, alignment=mapping))
+                        summary.append(summary_row(read, len(seq), mean_qscore, alignment=mapping, trim_positions=trim_positions))
 
                     self.log.append((read_id, samples))
+
+                    #if self.signal_mapping:
+                        # TODO figure out appending arrays to npz file and sort options to make this output optional
+                        #np.savez(npzfile, read_id=base_signal_alignments)
 
                 else:
                     logger.warn("> skipping empty sequence %s", read_id)

@@ -9,6 +9,8 @@ from itertools import groupby
 from functools import partial
 from operator import itemgetter
 
+import seqdist
+
 import bonito
 from bonito.io import Writer
 from bonito.fast5 import get_reads
@@ -95,7 +97,55 @@ def split_read(read, split_read_length=400000):
     return [(read, start, min(end, len(read.signal))) for (start, end) in zip(breaks[:-1], breaks[1:])]
 
 
-def basecall(model, reads, aligner=None, beamsize=40, chunksize=4000, overlap=500, batchsize=32, qscores=False, reverse=False):
+def rectify(ragged_array, max_len=None):
+    lengths = np.array([len(x) for x in ragged_array], dtype=np.uint16)
+    padded = np.zeros((len(ragged_array), max_len or np.max(lengths)), dtype=ragged_array[0].dtype)
+    for x, y in zip(ragged_array, padded):
+        y[:len(x)] = x
+    return padded, lengths
+
+
+def get_ctc_targets(seqs, dtype=np.int):
+    t = bytes.maketrans(b'ACGT', b'\x01\x02\x03\x04')
+    targets, target_lengths = rectify([np.array(bytearray(seq, 'utf-8').translate(t)) for seq in seqs])
+    return targets.astype(dtype), target_lengths.astype(dtype)
+
+
+def compute_signal_alignments(model, read, v):
+    with torch.no_grad():
+        device = next(model.parameters()).device
+        batch = torch.from_numpy(read.signal).unsqueeze(0).unsqueeze(0)
+        scores = model.encoder(batch.to(dtype=torch.float16, device=device))
+
+    targets, target_lengths = [torch.tensor(x, device=device) for x in get_ctc_targets([v['sequence']])]
+    stay_scores, move_scores = model.seqdist.prepare_ctc_scores(scores, targets)
+    target_lengths = target_lengths + 1 - model.seqdist.state_len
+    alignments = seqdist.ctc_simple.viterbi_alignments(stay_scores, move_scores, target_lengths)
+    return alignments.argmax(2).to(torch.int16).T[0].to('cpu').numpy()
+
+
+def signal_map(model, read, v):
+    """
+    Get base signal alignments for each sample.
+    """
+    alignments = compute_signal_alignments(model, read, v)
+
+    if v.get('mapping'):
+        mapping = v.get('mapping')
+
+        start = np.where(alignments == mapping.q_st)[0].min()
+        if len(np.where(alignments == mapping.q_en)[0]) == 0:
+            end = len(alignments)
+        else:
+            end = np.where(alignments == mapping.q_en)[0].max()
+        trim_start = start * model.stride
+        trim_end = end * model.stride
+        v['trim_positions'] = (trim_start, trim_end)
+
+    return (read, {**v, 'base_signal_alignments': alignments})
+
+
+def basecall(model, reads, aligner=None, beamsize=40, chunksize=4000, overlap=500, batchsize=32, qscores=False, reverse=False, signal_mapping=None):
     """
     Basecalls a set of reads.
     """
@@ -126,5 +176,8 @@ def basecall(model, reads, aligner=None, beamsize=40, chunksize=4000, overlap=50
         for read, seq in basecalls
     )
 
-    if aligner: return align_map(aligner, basecalls)
+    if aligner:
+        basecalls = align_map(aligner, basecalls)
+    if signal_mapping:
+        basecalls = (signal_map(model, read, v) for read, v in basecalls)
     return basecalls
