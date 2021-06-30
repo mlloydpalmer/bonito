@@ -7,16 +7,13 @@ import numpy as np
 from kbeam import beamsearch
 from itertools import groupby
 from functools import partial
-from operator import itemgetter
 
 import seqdist
 
 import bonito
-from bonito.io import Writer
-from bonito.fast5 import get_reads
 from bonito.aligner import align_map
 from bonito.multiprocessing import thread_map, thread_iter
-from bonito.util import concat, chunk, batchify, unbatchify, half_supported
+from bonito.util import chunk, batchify, unbatchify, half_supported
 
 
 def stitch(chunks, chunksize, overlap, length, stride, reverse=False):
@@ -128,9 +125,8 @@ def signal_map(model, read, v):
     """
     Get base signal alignments for each sample.
     """
-    alignments = compute_signal_alignments(model, read, v)
-
     if v.get('mapping'):
+        alignments = compute_signal_alignments(model, read, v)
         mapping = v.get('mapping')
 
         start = np.where(alignments == mapping.q_st)[0].min()
@@ -140,12 +136,13 @@ def signal_map(model, read, v):
             end = np.where(alignments == mapping.q_en)[0].max()
         trim_start = start * model.stride
         trim_end = end * model.stride
-        v['trim_positions'] = (trim_start, trim_end)
+    else:
+        trim_start, trim_end = -1, -1
 
-    return (read, {**v, 'base_signal_alignments': alignments})
+    return (read, {**v, 'trim_positions': (trim_start, trim_end)})
 
 
-def basecall(model, reads, aligner=None, beamsize=40, chunksize=4000, overlap=500, batchsize=32, qscores=False, reverse=False, signal_mapping=None):
+def basecall(model, reads, aligner=None, beamsize=40, chunksize=4000, overlap=500, batchsize=32, qscores=False, reverse=False, trim_sites=False):
     """
     Basecalls a set of reads.
     """
@@ -178,6 +175,7 @@ def basecall(model, reads, aligner=None, beamsize=40, chunksize=4000, overlap=50
 
     if aligner:
         basecalls = align_map(aligner, basecalls)
-    if signal_mapping:
-        basecalls = (signal_map(model, read, v) for read, v in basecalls)
+        if trim_sites:
+            basecalls = (signal_map(model, read, v) for read, v in basecalls)
+
     return basecalls

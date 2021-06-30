@@ -184,7 +184,7 @@ class ThreadMap(Thread):
         for i in count():
             item = self.output_queues[i % self.n_thread].get()
             if item is StopIteration:
-                #do we need to empty output_queues in order to join worker threads?
+                # do we need to empty output_queues in order to join worker threads?
                 for j in range(i + 1, i + self.n_thread):
                     self.output_queues[j % self.n_thread].get()
                 break

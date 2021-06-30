@@ -3,7 +3,6 @@ Bonito Basecaller
 """
 
 import sys
-import torch
 import numpy as np
 from tqdm import tqdm
 from time import perf_counter
@@ -62,11 +61,11 @@ def main(args):
     else:
         basecalls = basecall(
             model, reads, aligner=aligner, reverse=args.revcomp, qscores=args.fastq,
-            batchsize=args.batchsize, chunksize=args.chunksize, signal_mapping=args.signal_mapping
+            batchsize=args.batchsize, chunksize=args.chunksize, trim_sites=args.trim_sites
         )
         writer = Writer(
             tqdm(basecalls, desc="> calling", unit=" reads", leave=False),
-            aligner, model, fastq=args.fastq, signal_mapping=args.signal_mapping
+            aligner, model, fastq=args.fastq, trim_sites=args.trim_sites
         )
     t0 = perf_counter()
     writer.start()
@@ -101,5 +100,6 @@ def argparser():
     parser.add_argument("--batchsize", default=32, type=int)
     parser.add_argument("--chunksize", default=4000, type=int)
     parser.add_argument("--max-reads", default=0, type=int)
-    parser.add_argument("--signal_mapping", action="store_true", default=False, help="Include base signal mappings in summary.")
+    parser.add_argument("--trim_sites", action="store_true", default=False,
+                        help="Include trim sites in summary; sample index where alignment starts and ends.")
     return parser

@@ -167,7 +167,7 @@ summary_field_names = [
     'template_duration',
     'sequence_length_template',
     'mean_qscore_template',
-    #if alignment
+    # if alignment
     'alignment_genome',
     'alignment_genome_start',
     'alignment_genome_end',
@@ -184,7 +184,7 @@ summary_field_names = [
     'alignment_strand_coverage',
     'alignment_identity',
     'alignment_accuracy',
-    # if signal_mapping
+    # if trim_sites
     'trim_start',
     'trim_end',
 ]
@@ -262,7 +262,7 @@ duplex_summary_field_names = [
     'mux_complement',
     'sequence_length_duplex',
     'mean_qscore_duplex',
-    #if alignment
+    # if alignment
     'alignment_genome',
     'alignment_genome_start',
     'alignment_genome_end',
@@ -360,7 +360,7 @@ def signalmap_outfile():
 
 class Writer(Thread):
 
-    def __init__(self, iterator, aligner, model, fd=sys.stdout, fastq=False, duplex=False, signal_mapping=False):
+    def __init__(self, iterator, aligner, model, fd=sys.stdout, fastq=False, duplex=False, trim_sites=False):
         super().__init__()
         self.fd = fd
         self.log = []
@@ -369,7 +369,7 @@ class Writer(Thread):
         self.aligner = aligner
         self.model = model
         self.iterator = iterator
-        self.signal_mapping = signal_mapping
+        self.trim_sites = trim_sites
         self.write_headers()
 
     def write_headers(self):
@@ -378,7 +378,7 @@ class Writer(Thread):
 
     def run(self):
 
-        with CSVLogger(summary_file(), sep='\t') as summary:  #, conditional_open(signalmap_outfile(), 'w', cond=self.signal_mapping) as npzfile:
+        with CSVLogger(summary_file(), sep='\t') as summary:  # , conditional_open(signalmap_outfile(), 'w', cond=self.signal_mapping) as npzfile:
             for read, res in self.iterator:
 
                 seq = res['sequence']
@@ -411,9 +411,9 @@ class Writer(Thread):
 
                     self.log.append((read_id, samples))
 
-                    #if self.signal_mapping:
-                        # TODO figure out appending arrays to npz file and sort options to make this output optional
-                        #np.savez(npzfile, read_id=base_signal_alignments)
+                    # TODO figure out appending arrays to npz file and sort options to make this output optional
+                    # if self.signal_mapping:
+                    #     np.savez(npzfile, read_id=base_signal_alignments)
 
                 else:
                     logger.warn("> skipping empty sequence %s", read_id)
