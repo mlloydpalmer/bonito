@@ -129,11 +129,11 @@ def signal_map(model, read, v):
         alignments = compute_signal_alignments(model, read, v)
         mapping = v.get('mapping')
 
-        start = np.where(alignments == mapping.q_st)[0].min()
-        if len(np.where(alignments == mapping.q_en)[0]) == 0:
-            end = len(alignments)
-        else:
-            end = np.where(alignments == mapping.q_en)[0].max()
+        start = np.searchsorted(alignments, mapping.q_st, side='left')
+        # if base is missing, still do conservative trim
+        if mapping.q_st != 0 and len(np.where(alignments == mapping.q_st)[0]) == 0: start = start - 1
+        end = np.searchsorted(alignments, mapping.q_en, side='right') - 1
+
         trim_start = start * model.stride
         trim_end = end * model.stride
     else:
