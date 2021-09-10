@@ -6,7 +6,6 @@ import os
 import sys
 import csv
 import pandas as pd
-from warnings import warn
 from threading import Thread
 from logging import getLogger
 from contextlib import contextmanager
@@ -168,7 +167,7 @@ summary_field_names = [
     'template_duration',
     'sequence_length_template',
     'mean_qscore_template',
-    #if alignment
+    # if alignment
     'alignment_genome',
     'alignment_genome_start',
     'alignment_genome_end',
@@ -185,10 +184,13 @@ summary_field_names = [
     'alignment_strand_coverage',
     'alignment_identity',
     'alignment_accuracy',
+    # if trim_sites
+    'trim_start',
+    'trim_end',
 ]
 
 
-def summary_row(read, seqlen, qscore, alignment=False):
+def summary_row(read, seqlen, qscore, alignment=False, trim_positions=False):
     """
     Summary tsv row.
     """
@@ -230,10 +232,20 @@ def summary_row(read, seqlen, qscore, alignment=False):
             correct / length,
         ])
 
+        if isinstance(trim_positions, tuple):
+            fields.extend(
+                [trim_positions[0], trim_positions[1]]
+            )
+
     elif alignment is None:
         fields.extend(
             ['*', -1, -1, -1, -1, '*', 0, 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0]
         )
+
+        if isinstance(trim_positions, tuple):
+            fields.extend(
+                [-1, -1]
+            )
 
     return dict(zip(summary_field_names, fields))
 
@@ -250,7 +262,7 @@ duplex_summary_field_names = [
     'mux_complement',
     'sequence_length_duplex',
     'mean_qscore_duplex',
-    #if alignment
+    # if alignment
     'alignment_genome',
     'alignment_genome_start',
     'alignment_genome_end',
@@ -320,17 +332,44 @@ def duplex_summary_row(read_temp, comp_read, seqlen, qscore, alignment=False):
     return dict(zip(duplex_summary_field_names, fields))
 
 
+@contextmanager
+def conditional_open(f_name, mode, cond):
+    """
+    A context manager to conditionally open a file.
+    """
+    if cond:
+        resource = open(f_name, mode)
+        try:
+            yield resource
+        finally:
+            resource.close()
+    else:
+        yield None
+
+
+def signalmap_outfile():
+    """
+    Return the filenames to use for the trimmed_fast5s and refs.fasta.
+    """
+    stdout = realpath('/dev/fd/1')
+    if sys.stdout.isatty() or stdout.startswith('/proc'):
+        return 'base_signal_mappings.npz'
+    outdir = dirname(splitext(stdout)[0])
+    return '%s/base_signal_mappings.npz' % outdir
+
 
 class Writer(Thread):
 
-    def __init__(self, iterator, aligner, fd=sys.stdout, fastq=False, duplex=False):
+    def __init__(self, iterator, aligner, model, fd=sys.stdout, fastq=False, duplex=False, trim_sites=False):
         super().__init__()
         self.fd = fd
         self.log = []
         self.fastq = fastq
         self.duplex = duplex
         self.aligner = aligner
+        self.model = model
         self.iterator = iterator
+        self.trim_sites = trim_sites
         self.write_headers()
 
     def write_headers(self):
@@ -339,13 +378,15 @@ class Writer(Thread):
 
     def run(self):
 
-        with CSVLogger(summary_file(), sep='\t') as summary:
+        with CSVLogger(summary_file(), sep='\t') as summary:  # , conditional_open(signalmap_outfile(), 'w', cond=self.signal_mapping) as npzfile:
             for read, res in self.iterator:
 
                 seq = res['sequence']
                 qstring = res.get('qstring', '*')
                 mean_qscore = res.get('mean_qscore', 0.0)
                 mapping = res.get('mapping', False)
+                base_signal_alignments = res.get('base_signal_alignments', False)
+                trim_positions = res.get('trim_positions', False)
 
                 if self.duplex:
                     samples = len(read[0].signal) + len(read[1].signal)
@@ -366,9 +407,13 @@ class Writer(Thread):
                     if self.duplex:
                         summary.append(duplex_summary_row(read[0], read[1], len(seq), mean_qscore, alignment=mapping))
                     else:
-                        summary.append(summary_row(read, len(seq), mean_qscore, alignment=mapping))
+                        summary.append(summary_row(read, len(seq), mean_qscore, alignment=mapping, trim_positions=trim_positions))
 
                     self.log.append((read_id, samples))
+
+                    # TODO figure out appending arrays to npz file and sort options to make this output optional
+                    # if self.signal_mapping:
+                    #     np.savez(npzfile, read_id=base_signal_alignments)
 
                 else:
                     logger.warn("> skipping empty sequence %s", read_id)

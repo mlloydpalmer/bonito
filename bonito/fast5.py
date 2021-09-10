@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from functools import partial
 from multiprocessing import Pool
-from itertools import chain, starmap
+from itertools import chain
 
 import torch
 import numpy as np
@@ -40,21 +40,31 @@ class Read:
         self.duration = read_attrs['duration'] / self.sampling_rate
 
         raw = read.handle[read.raw_dataset_name][:]
+        self.raw = raw
         scaled = np.array(self.scaling * (raw + self.offset), dtype=np.float32)
 
-        trim_start, _ = trim(scaled[:8000])
-        scaled = scaled[trim_start:]
-        self.template_start = self.start + (1 / self.sampling_rate) * trim_start
-        self.template_duration = self.duration - (1 / self.sampling_rate) * trim_start
-
-        if len(scaled) > 8000:
-            med, mad = med_mad(scaled)
-            self.signal = (scaled - med) / mad
+        if len(self.raw) <= 10:
+            sys.stderr.write(
+                "> skipping short read %s (%s samples)\n" % (self.read_id, len(self.raw))
+            )
+            self.template_start = None
+            self.template_duration = None
+            self.signal = None
         else:
-            self.signal = norm_by_noisiest_section(scaled)
+            trim_start, _ = trim(scaled[:8000])
+            scaled = scaled[trim_start:]
 
-    def __repr__(self):
-        return "Read('%s')" % self.read_id
+            self.template_start = self.start + (1 / self.sampling_rate) * trim_start
+            self.template_duration = self.duration - (1 / self.sampling_rate) * trim_start
+
+            if len(scaled) > 8000:
+                med, mad = med_mad(scaled)
+                self.signal = (scaled - med) / mad
+            else:
+                self.signal = norm_by_noisiest_section(scaled)
+
+        def __repr__(self):
+            return "Read('%s')" % self.read_id
 
 
 class ReadChunk:
@@ -162,8 +172,12 @@ def get_read_ids(filename, read_ids=None, skip=False):
     """
     Get all the read_ids from the file `filename`.
     """
-    with get_fast5_file(filename, 'r') as f5_fh:
-        ids = [(filename, rid) for rid in f5_fh.get_read_ids()]
+    try:
+        with get_fast5_file(filename, 'r') as f5_fh:
+            ids = [(filename, rid) for rid in f5_fh.get_read_ids()]
+    except OSError:
+        sys.stderr.write("OSError when reading file %s\n" % (filename))
+    else:
         if read_ids is None:
             return ids
         return [rid for rid in ids if (rid[1] in read_ids) ^ skip]
@@ -186,7 +200,15 @@ def get_reads(directory, read_ids=None, skip=False, max_read_size=0, n_proc=1, r
     get_filtered_reads = partial(get_read_ids, read_ids=read_ids, skip=skip)
     with Pool(n_proc) as pool:
         for job in chain(pool.imap(get_filtered_reads, Path(directory).glob(pattern))):
+            if job is None: continue
             for read in pool.imap(get_raw_data_for_read, job):
+                if read.signal is None:
+                    continue
+                if len(read.signal) < 100:
+                    sys.stderr.write(
+                        "> skipping short read %s (%s samples)\n" % (read.read_id, len(read.signal))
+                    )
+                    continue
                 if max_read_size > 0 and len(read.signal) > max_read_size:
                     sys.stderr.write(
                         "> skipping long read %s (%s samples)\n" % (read.read_id, len(read.signal))
