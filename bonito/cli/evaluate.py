@@ -72,7 +72,17 @@ def main(args):
         refs = [decode_ref(target, model.alphabet) for target in targets]
         accuracies = [accuracy_with_cov(ref, seq) if len(seq) else 0. for ref, seq in zip(refs, seqs)]
 
-        if args.poa: poas.append(sequences)
+        if args.poa: poas.append(seqs)
+
+        os.makedirs(args.outdir, exist_ok=True)
+        with open(f'{args.outdir}/accuracies.csv', 'w') as acc_file, open(f'{args.outdir}/basecalls.fasta', 'w') as fa_file, open(f'{args.outdir}/references.fasta', 'w') as ref_file:
+            acc_file.write('chunk_accuracy' + '\n')
+            for n, (acc, seq, ref) in enumerate(zip(accuracies, seqs, refs)):
+                acc_file.write(str(acc) + '\n')
+                fa_file.write(f'>chunk{n}' + '\n')
+                fa_file.write(str(seq) + '\n')
+                ref_file.write(f'>chunk{n}_ref' + '\n')
+                ref_file.write(str(ref) + '\n')
 
         print("* mean      %.2f%%" % np.mean(accuracies))
         print("* median    %.2f%%" % np.median(accuracies))
@@ -87,7 +97,7 @@ def main(args):
         poas = [list(seq) for seq in zip(*poas)]
         consensuses = poa(poas)
         duration = time.perf_counter() - t0
-        accuracies = list(starmap(accuracy_with_coverage_filter, zip(references, consensuses)))
+        accuracies = list(starmap(accuracy_with_cov, zip(refs, consensuses)))
 
         print("* mean      %.2f%%" % np.mean(accuracies))
         print("* median    %.2f%%" % np.median(accuracies))
@@ -104,9 +114,10 @@ def argparser():
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--seed", default=9, type=int)
     parser.add_argument("--weights", default="0", type=str)
-    parser.add_argument("--chunks", default=1000, type=int)
+    parser.add_argument("--chunks", default=160000, type=int)
     parser.add_argument("--batchsize", default=96, type=int)
     parser.add_argument("--beamsize", default=5, type=int)
     parser.add_argument("--poa", action="store_true", default=False)
-    parser.add_argument("--min-coverage", default=0.5, type=float)
+    parser.add_argument("--min-coverage", default=0, type=float)
+    parser.add_argument("--outdir", default='bonito_evaluate_results', type=Path)
     return parser
